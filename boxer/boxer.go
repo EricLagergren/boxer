@@ -12,7 +12,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"math"
 
 	"golang.org/x/crypto/nacl/secretbox"
 )
@@ -30,6 +29,9 @@ const (
 
 	// Overhead is the number of bytes of overhead when boxing a message.
 	Overhead = secretbox.Overhead
+
+	// MaxChunkSize is the largest allowed chunk size.
+	MaxChunkSize = 1<<31 - 1
 
 	// offset is the number of bytes used to advise the length of the
 	// chunk. It should be large enough to advise the entirety of
@@ -72,7 +74,7 @@ type Encryptor struct {
 //
 // Neither nonce or key are modified.
 func NewEncryptorSize(w io.Writer, nonce *[16]byte, key *[32]byte, size int) (*Encryptor, error) {
-	if size > math.MaxInt32 {
+	if size > MaxChunkSize {
 		return nil, ErrChunkSize
 	}
 	e := Encryptor{w: w, size: size}
@@ -134,6 +136,8 @@ func (e *Encryptor) flush() error {
 	return e.err
 }
 
+var oneLit = []byte{1}
+
 // Close closes the Encryptor, flushing any unwritten data to the underlying
 // io.Writer but does not close the underlying io.Writer.
 func (e *Encryptor) Close() (err error) {
@@ -143,7 +147,7 @@ func (e *Encryptor) Close() (err error) {
 	// Write out any pending data, mark the nonce, then write our EOF byte.
 	e.flush()
 	e.nonce[23] |= 0x80
-	_, err = e.Write([]byte{1})
+	_, err = e.Write(oneLit)
 	e.flush()
 
 	for i := range e.in {
@@ -174,11 +178,11 @@ func incrCounter(nonce *[24]byte) {
 // Decryptor is an io.ReadCloser that reads encrypted data written by an
 // Encryptor.
 type Decryptor struct {
-	r     io.Reader
+	r     io.Reader // underlying io.Reader
 	nonce *[24]byte
 	key   *[32]byte
-	rp    int // read position
-	eb    int // end of chunk, meaning depends on part of code
+	flags uint8
+	off   int // read at out[off]
 	in    []byte
 	out   []byte
 	size  chunk // chunk size
@@ -197,7 +201,7 @@ func NewDecryptor(r io.Reader, nonce *[16]byte, key *[32]byte) (*Decryptor, erro
 	if err != nil {
 		return nil, err
 	}
-	d.out = make([]byte, d.size)
+	d.out = make([]byte, 0, d.size)
 	d.in = make([]byte, offset+Overhead+d.size)
 	d.nonce, d.key = nonceKey(nonce, key)
 	return &d, nil
@@ -212,9 +216,9 @@ func (d *Decryptor) readHeaders() error {
 	if buf[0] != ver1 {
 		return errors.New("boxer: invalid version ID")
 	}
-	_ = buf[1] // Future: flags.
+	d.flags = buf[1] // Future: flags.
 	d.size = chunk(binary.LittleEndian.Uint32(buf[2:]))
-	if d.size >= math.MaxInt32 {
+	if d.size >= MaxChunkSize {
 		return ErrChunkSize
 	}
 	d.next = chunk(binary.LittleEndian.Uint32(buf[6:]))
@@ -223,36 +227,35 @@ func (d *Decryptor) readHeaders() error {
 
 // Read implements io.Reader.
 func (d *Decryptor) Read(p []byte) (n int, err error) {
-	if d.err != nil || len(p) == 0 {
+	if d.err != nil {
 		return 0, d.err
 	}
-	var m int
-	for n < len(p) {
-		if d.rp >= d.eb {
-			d.err = d.fill()
-			if d.err != nil {
-				return n, d.err
-			}
+	if d.off >= len(d.out) {
+		d.off = 0
+		if len(p) == 0 {
+			return n, err
 		}
-		m = copy(p[n:], d.out[d.rp:d.eb])
-		d.rp += m
-		n += m
+		d.err = d.fill()
+		if d.err != nil {
+			return n, d.err
+		}
 	}
+	n = copy(p[:], d.out[d.off:])
+	d.off += n
 	return n, nil
 }
 
-func (d *Decryptor) fill() (err error) {
+func (d *Decryptor) fill() error {
 	if d.err != nil {
 		return d.err
 	}
 
-	d.eb, err = d.r.Read(d.in[:d.next+offset])
+	n, err := d.r.Read(d.in[:d.next+offset])
 	if err != nil {
 		return err
 	}
 
-	d.rp = 0
-	d.next = chunk(binary.LittleEndian.Uint32(d.in[d.eb-offset:]))
+	d.next = chunk(binary.LittleEndian.Uint32(d.in[n-offset:]))
 
 	// The minimum read should be 18 bytes. The only time we'll
 	// have less is the very end where our buffer looks like:
@@ -261,25 +264,25 @@ func (d *Decryptor) fill() (err error) {
 	//   |_____________________________| |_ EOF byte
 	//                  |
 	//        16 bytes of authenticator
-	if d.eb < Overhead+offset {
-		d.last = true
+	last := n < Overhead+offset
+	if last {
 		d.nonce[23] |= 0x80
 	} else {
-		d.eb -= offset
+		n -= offset
 	}
 
 	// If we're reading the last chunk it's okay to have an invalid next chunk.
 	// It might be left over data from the previous read.
-	if !d.last && (d.next <= 0 || d.next > d.size+Overhead) {
+	if !last && (d.next <= 0 || d.next > d.size+Overhead) {
 		return ErrInvalidData
 	}
 
-	m, ok := secretbox.Open(d.out[:0], d.in[:d.eb], d.nonce, d.key)
+	var ok bool
+	d.out, ok = secretbox.Open(d.out[:0], d.in[:n], d.nonce, d.key)
 	if !ok {
 		return ErrInvalidData
 	}
-	d.eb = len(m)
-	if d.last {
+	if last {
 		if d.out[0] != 1 {
 			return ErrInvalidData
 		}

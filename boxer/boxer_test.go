@@ -41,7 +41,7 @@ func testCrypt(t *testing.T, e *Encryptor, r io.Reader, data []byte) {
 	}
 
 	if !bytes.Equal(data, buf2.Bytes()) {
-		log.Fatalf("data len == %d, buf2 len == %d",
+		log.Fatalf("data len == %d, got len == %d",
 			len(data), len(buf2.Bytes()))
 	}
 }
