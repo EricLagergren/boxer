@@ -167,7 +167,7 @@ func (e *Encryptor) Close() (err error) {
 }
 
 func incrCounter(nonce *[24]byte) {
-	for i := 16; i < 24; i++ {
+	for i := range nonce[16:] {
 		nonce[i]++
 		if nonce[i] != 0 {
 			break

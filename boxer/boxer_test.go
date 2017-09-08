@@ -17,7 +17,7 @@ var (
 func init() {
 	log.SetFlags(log.Llongfile | log.LstdFlags)
 	var err error
-	data, err = ioutil.ReadFile("/usr/share/dict/american-english")
+	data, err = ioutil.ReadFile("/usr/share/dict/words")
 	if err != nil {
 		data = []byte("hello, world!")
 	}
@@ -34,6 +34,7 @@ func testCrypt(t *testing.T, e *Encryptor, r io.Reader, data []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	var buf2 bytes.Buffer
 	_, err = io.Copy(&buf2, d)
 	if err != nil {
