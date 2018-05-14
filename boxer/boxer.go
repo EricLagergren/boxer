@@ -33,9 +33,8 @@ const (
 	// MaxChunkSize is the largest allowed chunk size.
 	MaxChunkSize = 1<<31 - 1
 
-	// offset is the number of bytes used to advise the length of the
-	// chunk. It should be large enough to advise the entirety of
-	// the chunk.
+	// offset is the number of bytes used to advise the length of the chunk. It
+	// should be large enough to advise the entirety of the chunk.
 	offset = 4
 
 	ver1 = 1
@@ -70,16 +69,15 @@ type Encryptor struct {
 // Writes will always be chunk size + Overhead.
 //
 // All writes will not be flushed until Close is called. Not closing an
-// Encryptor will rsult in an invalid stream.
+// Encryptor will result in an invalid stream.
 //
-// Neither nonce or key are modified.
+// Neither nonce nor key are modified.
 func NewEncryptorSize(w io.Writer, nonce *[16]byte, key *[32]byte, size int) (*Encryptor, error) {
 	if size > MaxChunkSize {
 		return nil, ErrChunkSize
 	}
 	e := Encryptor{w: w, size: size}
-	err := e.writeHeaders()
-	if err != nil {
+	if err := e.writeHeaders(); err != nil {
 		return nil, err
 	}
 	// Save the allocations until after we've determined everything is kosher.
@@ -167,7 +165,7 @@ func (e *Encryptor) Close() (err error) {
 }
 
 func incrCounter(nonce *[24]byte) {
-	for i := range nonce[16:] {
+	for i := 16; i < len(nonce); i++ {
 		nonce[i]++
 		if nonce[i] != 0 {
 			break
@@ -209,8 +207,7 @@ func NewDecryptor(r io.Reader, nonce *[16]byte, key *[32]byte) (*Decryptor, erro
 
 func (d *Decryptor) readHeaders() error {
 	var buf [1 /* ver */ + 1 /* flags */ + 4 /* chunk */ + 4 /* next */ + 0]byte
-	_, err := io.ReadFull(d.r, buf[:])
-	if err != nil {
+	if _, err := io.ReadFull(d.r, buf[:]); err != nil {
 		return err
 	}
 	if buf[0] != ver1 {
@@ -233,10 +230,9 @@ func (d *Decryptor) Read(p []byte) (n int, err error) {
 	if d.off >= len(d.out) {
 		d.off = 0
 		if len(p) == 0 {
-			return n, err
+			return 0, nil
 		}
-		d.err = d.fill()
-		if d.err != nil {
+		if d.err = d.fill(); d.err != nil {
 			return n, d.err
 		}
 	}

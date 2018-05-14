@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/EricLagergren/boxer/boxer"
 	"golang.org/x/crypto/ssh/terminal"
@@ -65,8 +66,7 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	_, err = io.Copy(out, in)
-	if err != nil {
+	if _, err := io.Copy(out, in); err != nil {
 		log.Fatalln(err)
 	}
 }
@@ -97,7 +97,10 @@ func readData(what, from string, to []byte) error {
 		}
 	}()
 
-	fmt.Println(what)
+	if !strings.HasSuffix(what, "\n") {
+		what += "\n"
+	}
+	os.Stdout.WriteString(what)
 	b, err := terminal.ReadPassword(infd)
 	if err != nil {
 		return err
